@@ -318,6 +318,35 @@ class Saml2Client(object):
                         
         return request
 
+    def _logout_response(self, idp_entity_id, request_id,
+                         status_code, binding=BINDING_HTTP_REDIRECT):
+        """ Constructs a LogoutResponse
+
+        :param idp_entity_id: The entityid of the IdP that want to do the
+            logout
+        :param request_id: The Id of the request we are replying to
+        :param status_code: The status code of the response
+        :param binding: The type of binding that will be used for the response
+        :return: A LogoutResponse instance and its destination
+        """
+
+        destination = self.config.single_logout_services(idp_entity_id, binding)[0]
+
+        status = samlp.Status(
+            status_code=samlp.StatusCode(value=status_code))
+
+        response = samlp.LogoutResponse(
+            id=sid(),
+            version=VERSION,
+            issue_instant=instant(),
+            destination=destination,
+            issuer=self._issuer(),
+            in_response_to=request_id,
+            status=status,
+            )
+
+        return response, destination
+
     #
     # Public API
     #
@@ -573,11 +602,9 @@ class Saml2Client(object):
                 log.info("No response")
             return None
     
-    def global_logout(self, subject_id, reason="", expire=None,
+    def global_logout(self, subject_id, reason="", expire=None,  # ***
                           sign=None, log=None, return_to="/"):
-        """ More or less a layer of indirection :-/
-        Bootstrapping the whole thing by finding all the IdPs that should
-        be notified.
+        """Creates a Logout Request.
         
         :param subject_id: The identifier of the subject that wants to be
             logged out.
@@ -593,7 +620,6 @@ class Saml2Client(object):
             if SOAP binding has been used the just the result of that
             conversation. 
         """
-
         if log is None:
             log = self.logger
 
@@ -603,16 +629,10 @@ class Saml2Client(object):
         # find out which IdPs/AAs I should notify
         entity_ids = self.users.issuers_of_info(subject_id)
 
-        return self._logout(subject_id, entity_ids, reason, expire, 
-                            sign, log, return_to)
-        
-    def _logout(self, subject_id, entity_ids, reason, expire, 
-                sign=None, log=None, return_to="/"):
-        
         # check time
         if not not_on_or_after(expire): # I've run out of time
             # Do the local logout anyway
-            self.local_logout(subject_id)
+            self.users.remove_person(subject_id)
             return 0, "504 Gateway Timeout", [], []
             
         # for all where I can use the SOAP binding, do those first
@@ -707,14 +727,6 @@ class Saml2Client(object):
         
         return 0, "", [], response
 
-    def local_logout(self, subject_id):
-        """ Remove the user from the cache, equals local logout 
-        
-        :param subject_id: The identifier of the subject
-        """
-        self.users.remove_person(subject_id)
-        return True
-
     def handle_logout_response(self, response, log):
         """ handles a Logout response 
         
@@ -736,18 +748,18 @@ class Saml2Client(object):
             log.info("issuer: %s" % issuer)
         del self.state[response.in_response_to]
         if status["entity_ids"] == [issuer]: # done
-            self.local_logout(status["subject_id"])
+            self.users.remove_person(status["subject_id"])
             return 0, "200 Ok", [("Content-type","text/html")], []
         else:
             status["entity_ids"].remove(issuer)
-            return self._logout(status["subject_id"], 
-                                status["entity_ids"], 
-                                status["reason"], 
-                                status["not_on_or_after"], 
-                                status["sign"], 
-                                log, )
+            return self.global_logout(status["subject_id"], 
+                                      status["entity_ids"], 
+                                      status["reason"], 
+                                      status["not_on_or_after"], 
+                                      status["sign"], 
+                                      log, )
         
-    def logout_response(self, xmlstr, log=None, binding=BINDING_SOAP):
+    def logout_response(self, xmlstr, log=None, binding=BINDING_SOAP):  # ***
         """ Deal with a LogoutResponse
 
         :param xmlstr: The response as a xml string
@@ -831,14 +843,16 @@ class Saml2Client(object):
 
             if request.name_id.text == subject_id:
                 status = samlp.STATUS_SUCCESS
-                success = self.local_logout(subject_id)
+                self.users.remove_person(subject_id)
+                success = True
             else:
                 status = samlp.STATUS_REQUEST_DENIED
 
-            response, destination = self .make_logout_response(
-                                                        request.issuer.text,
-                                                        request.id,
-                                                        status)
+            response, destination = self._logout_response(
+                request.issuer.text,
+                request.id,
+                status
+                )
 
             if log:
                 log.info("RESPONSE: {0:>s}".format(response))
@@ -854,7 +868,7 @@ class Saml2Client(object):
 
         return headers, success
 
-    def logout_request(self, request, subject_id, log=None, 
+    def logout_request(self, request, subject_id, log=None,   # ***
                             binding=BINDING_HTTP_REDIRECT):
         """ Deal with a LogoutRequest 
 
@@ -867,36 +881,7 @@ class Saml2Client(object):
             log = self.logger
 
         if binding == BINDING_HTTP_REDIRECT:
-            return self.http_redirect_logout_request(request, subject_id, log)
-        
-    def make_logout_response(self, idp_entity_id, request_id,
-                             status_code, binding=BINDING_HTTP_REDIRECT):
-        """ Constructs a LogoutResponse
-
-        :param idp_entity_id: The entityid of the IdP that want to do the
-            logout
-        :param request_id: The Id of the request we are replying to
-        :param status_code: The status code of the response
-        :param binding: The type of binding that will be used for the response
-        :return: A LogoutResponse instance
-        """
-
-        destination = self.config.single_logout_services(idp_entity_id, binding)[0]
-
-        status = samlp.Status(
-            status_code=samlp.StatusCode(value=status_code))
-
-        response = samlp.LogoutResponse(
-            id=sid(),
-            version=VERSION,
-            issue_instant=instant(),
-            destination=destination,
-            issuer=self._issuer(),
-            in_response_to=request_id,
-            status=status,
-            )
-
-        return response, destination
+            return self.http_redirect_logout_request(request, subject_id, log)        
 
     def add_vo_information_about_user(self, subject_id):
         """ Add information to the knowledge I have about the user. This is
