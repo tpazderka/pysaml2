@@ -139,26 +139,20 @@ class TestServer1():
         assert status.status_code.value == samlp.STATUS_SUCCESS
 
     def test_parse_faulty_request(self):
-        authn_request = self.client.authn_request(
-                            query_id = "id1",
-                            destination = "http://www.example.com",
-                            service_url = "http://www.example.org",
-                            spentityid = "urn:mace:example.com:saml:roland:sp",
-                            my_name = "My real name",
-                        )
+        authn_request = self.client._authn_request(
+            query_id = "id1",
+            destination = "http://www.example.com",
+            )
 
         intermed = s_utils.deflate_and_base64_encode("%s" % authn_request)
         # should raise an error because faulty spentityid
         raises(OtherError, self.server.parse_authn_request, intermed)
 
     def test_parse_faulty_request_to_err_status(self):
-        authn_request = self.client.authn_request(
-                            query_id = "id1",
-                            destination = "http://www.example.com",
-                            service_url = "http://www.example.org",
-                            spentityid = "urn:mace:example.com:saml:roland:sp",
-                            my_name = "My real name",
-                        )
+        authn_request = self.client._authn_request(
+            query_id = "id1",
+            destination = "http://www.example.com",
+            )
 
         intermed = s_utils.deflate_and_base64_encode("%s" % authn_request)
         try:
@@ -178,13 +172,10 @@ class TestServer1():
         assert status_code.status_code.value == samlp.STATUS_UNKNOWN_PRINCIPAL
 
     def test_parse_ok_request(self):
-        authn_request = self.client.authn_request(
-                            query_id = "id1",
-                            destination = "http://localhost:8088/sso",
-                            service_url = "http://localhost:8087/",
-                            spentityid = "urn:mace:example.com:saml:roland:sp",
-                            my_name = "My real name",
-                        )
+        authn_request = self.client._authn_request(
+            query_id = "id1",
+            destination = "http://localhost:8088/sso",
+            )
 
         print authn_request
         intermed = s_utils.deflate_and_base64_encode("%s" % authn_request)

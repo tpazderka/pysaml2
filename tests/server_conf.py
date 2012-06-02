@@ -10,7 +10,7 @@ CONFIG={
     "service": {
         "sp": {
             "endpoints":{
-                "assertion_consumer_service": ["http://lingon.catalogix.se:8087/"],
+                "assertion_consumer_service": ["http://localhost:8087/"],
             },
             "required_attributes": ["surName", "givenName", "mail"],
             "optional_attributes": ["title"],

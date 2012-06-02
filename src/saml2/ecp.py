@@ -116,9 +116,9 @@ def ecp_auth_request(cls, entityid=None, relay_state="",
         
     location = cls._sso_location(entityid, binding=BINDING_SOAP)
     session_id = sid()
-    authn_req = cls.authn(location, session_id, log=log,
-                          binding=BINDING_PAOS,
-                          service_url_binding=BINDING_PAOS)
+    authn_req = cls._authn_request(session_id, location, log=log,
+                                   binding=BINDING_PAOS,
+                                   service_url_binding=BINDING_PAOS)
 
     body = soapenv.Body()
     body.extension_elements = [element_to_extension_element(authn_req)]

@@ -179,19 +179,18 @@ class TestClient:
     #     assert idp_entry.loc == ['http://localhost:8088/sso']
     
     def test_create_auth_request_0(self):
-        ar_str = "%s" % self.client.authn_request("id1",
-                                        "http://www.example.com/sso",
-                                        "http://www.example.org/service",
-                                        "urn:mace:example.org:saml:sp",
-                                        "My Name")
+        ar_str = "%s" % self.client._authn_request("id1",
+                                                   destination="http://www.example.com/sso")
+                                                   #"http://www.example.org/service",
+                                                   #"urn:mace:example.org:saml:sp")
         ar = samlp.authn_request_from_string(ar_str)
         print ar
-        assert ar.assertion_consumer_service_url == "http://www.example.org/service"
+        assert ar.assertion_consumer_service_url == "http://localhost:8087/"
         assert ar.destination == "http://www.example.com/sso"
         assert ar.protocol_binding == BINDING_HTTP_POST
         assert ar.version == "2.0"
-        assert ar.provider_name == "My Name"
-        assert ar.issuer.text == "urn:mace:example.org:saml:sp"
+        assert ar.provider_name == "urn:mace:example.com:saml:roland:sp"
+        assert ar.issuer.text == "urn:mace:example.com:saml:roland:sp"
         nid_policy = ar.name_id_policy
         assert nid_policy.allow_create == "true"
         assert nid_policy.format == saml.NAMEID_FORMAT_TRANSIENT
@@ -199,23 +198,22 @@ class TestClient:
     def test_create_auth_request_vo(self):
         assert self.client.config.virtual_organization.keys() == [
                                     "urn:mace:example.com:it:tek"]
-                                    
-        ar_str = "%s" % self.client.authn_request("666",
+        self.client.config.entityid = "urn:mace:example.org:saml:sp"
+        ar_str = "%s" % self.client._authn_request("666",
                                         "http://www.example.com/sso",
-                                        "http://www.example.org/service",
-                                        "urn:mace:example.org:saml:sp",
-                                        "My Name",
+                                        #"http://www.example.org/service",
+                                        #"urn:mace:example.org:saml:sp",
                                         vorg="urn:mace:example.com:it:tek")
               
         ar = samlp.authn_request_from_string(ar_str)
         print ar
         assert ar.id == "666"
-        assert ar.assertion_consumer_service_url == "http://www.example.org/service"
+        assert ar.assertion_consumer_service_url == "http://localhost:8087/"
         assert ar.destination == "http://www.example.com/sso"
         assert ar.protocol_binding == BINDING_HTTP_POST
         assert ar.version == "2.0"
-        assert ar.provider_name == "My Name"
-        assert ar.issuer.text == "urn:mace:example.org:saml:sp"
+        assert ar.provider_name == "urn:mace:example.com:saml:roland:sp"
+        assert ar.issuer.text == "urn:mace:example.com:saml:roland:sp"
         nid_policy = ar.name_id_policy
         assert nid_policy.allow_create == "true"
         assert nid_policy.format == saml.NAMEID_FORMAT_PERSISTENT
@@ -223,12 +221,11 @@ class TestClient:
         
     def test_sign_auth_request_0(self):
         #print self.client.config
-        
-        ar_str = "%s" % self.client.authn_request("id1",
+        ar_str = "%s" % self.client._authn_request("id1",
                                         "http://www.example.com/sso",
-                                        "http://www.example.org/service",
-                                        "urn:mace:example.org:saml:sp",
-                                        "My Name", sign=True)
+                                        #"http://www.example.org/service",
+                                        #"urn:mace:example.org:saml:sp",
+                                        sign=True)
                                     
         ar = samlp.authn_request_from_string(ar_str)
 
@@ -325,7 +322,7 @@ class TestClient:
         assert location == 'http://localhost:8088/sso'
         service_url = self.client.service_url()
         print service_url
-        assert service_url == "http://lingon.catalogix.se:8087/"
+        assert service_url == "http://localhost:8087/"
         my_name = self.client._my_name()
         print my_name
         assert my_name == "urn:mace:example.com:saml:roland:sp"
@@ -359,7 +356,7 @@ class TestClient:
         print authnreq.keyswv()
         assert authnreq.id == sid
         assert authnreq.destination == "http://localhost:8088/sso"
-        assert authnreq.assertion_consumer_service_url == "http://lingon.catalogix.se:8087/"
+        assert authnreq.assertion_consumer_service_url == "http://localhost:8087/"
         assert authnreq.provider_name == "urn:mace:example.com:saml:roland:sp"
         assert authnreq.protocol_binding == BINDING_HTTP_POST
         name_id_policy = authnreq.name_id_policy

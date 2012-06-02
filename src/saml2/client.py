@@ -194,6 +194,92 @@ class Saml2Client(object):
     def _my_name(self):
         return self.config.name
 
+    def _authn_request(self, query_id, destination, log=None,
+                       vorg="", scoping=None, sign=None,
+                       binding=saml2.BINDING_HTTP_POST,
+                       service_url_binding=None,
+                       nameid_format=saml.NAMEID_FORMAT_TRANSIENT):
+        """ Creates an authentication request.
+        
+        :param query_id: The identifier for this request
+        :param destination: Where the request should be sent.
+        :param vorg: The vitual organization the service belongs to.
+        :param scoping: The scope of the request
+        :param log: A service to which logs should be written
+        :param sign: Whether the request should be signed or not.
+        :param binding: The protocol to use for the Response !!
+        :return: <samlp:AuthnRequest> instance
+        """
+        spentityid = self.config.entityid
+        if service_url_binding is None:
+            service_url = self.service_url(binding)
+        else:
+            service_url = self.service_url(service_url_binding)
+
+        if binding == BINDING_PAOS:
+            my_name = None
+            destination = None
+        else:
+            my_name = self._my_name()
+
+        if log is None:
+            log = self.logger
+
+        if log:
+            log.info("spentityid: %s" % spentityid)
+            log.info("service_url: %s" % service_url)
+            log.info("my_name: %s" % my_name)
+
+        request = samlp.AuthnRequest(
+            id= query_id,
+            version= VERSION,
+            issue_instant= instant(),
+            assertion_consumer_service_url= service_url,
+            protocol_binding= binding
+        )
+
+        if destination:
+            request.destination = destination
+        if my_name:
+            request.provider_name = my_name
+        if scoping:
+            request.scoping = scoping
+
+        # Profile stuff, should be configurable
+        if nameid_format == saml.NAMEID_FORMAT_TRANSIENT:
+            name_id_policy = samlp.NameIDPolicy(allow_create="true",
+                                                format=nameid_format)
+        else:
+            name_id_policy = samlp.NameIDPolicy(format=nameid_format)
+
+        if vorg:
+            try:
+                name_id_policy.sp_name_qualifier = vorg
+                name_id_policy.format = saml.NAMEID_FORMAT_PERSISTENT
+            except KeyError:
+                pass
+
+        if sign is None:
+            sign = self.authn_requests_signed_default
+
+        if sign:
+            request.signature = pre_signature_part(request.id,
+                                                    self.sec.my_cert, 1)
+            to_sign = [(class_name(request), request.id)]
+        else:
+            to_sign = []
+
+        request.name_id_policy = name_id_policy
+        request.issuer = self._issuer(spentityid)
+
+        if log is None:
+            log = self.logger
+
+        if log:
+            log.info("REQUEST: %s" % request)
+
+        return signed_instance_factory(request, self.sec, to_sign)
+
     #
     # Public API
     #
@@ -260,114 +346,6 @@ class Saml2Client(object):
             elif log:
                 log.error("Response type not supported: %s" % saml2.class_name(resp))
         return resp
-    
-    def authn_request(self, query_id, destination, service_url, spentityid,
-                        my_name="", vorg="", scoping=None, log=None, sign=None,
-                        binding=saml2.BINDING_HTTP_POST,
-                        nameid_format=saml.NAMEID_FORMAT_TRANSIENT):
-        """ Creates an authentication request.
-        
-        :param query_id: The identifier for this request
-        :param destination: Where the request should be sent.
-        :param service_url: Where the reply should be sent.
-        :param spentityid: The entity identifier for this service.
-        :param my_name: The name of this service.
-        :param vorg: The vitual organization the service belongs to.
-        :param scoping: The scope of the request
-        :param log: A service to which logs should be written
-        :param sign: Whether the request should be signed or not.
-        :param binding: The protocol to use for the Response !!
-        :return: <samlp:AuthnRequest> instance
-        """
-        request = samlp.AuthnRequest(
-            id= query_id,
-            version= VERSION,
-            issue_instant= instant(),
-            assertion_consumer_service_url= service_url,
-            protocol_binding= binding
-        )
-
-        if destination:
-            request.destination = destination
-        if my_name:
-            request.provider_name = my_name
-        if scoping:
-            request.scoping = scoping
-        
-        # Profile stuff, should be configurable
-        if nameid_format == saml.NAMEID_FORMAT_TRANSIENT:
-            name_id_policy = samlp.NameIDPolicy(allow_create="true",
-                                                format=nameid_format)
-        else:
-            name_id_policy = samlp.NameIDPolicy(format=nameid_format)
-
-        if vorg:
-            try:
-                name_id_policy.sp_name_qualifier = vorg
-                name_id_policy.format = saml.NAMEID_FORMAT_PERSISTENT
-            except KeyError:
-                pass
-
-        if sign is None:
-            sign = self.authn_requests_signed_default
-        
-        if sign:
-            request.signature = pre_signature_part(request.id,
-                                                    self.sec.my_cert, 1)
-            to_sign = [(class_name(request), request.id)]
-        else:
-            to_sign = []
-        
-        request.name_id_policy = name_id_policy
-        request.issuer = self._issuer(spentityid)
-
-        if log is None:
-            log = self.logger
-
-        if log:
-            log.info("REQUEST: %s" % request)
-        
-        return signed_instance_factory(request, self.sec, to_sign)
-
-    def authn(self, location, session_id, vorg="", scoping=None, log=None,
-                sign=None, binding=saml2.BINDING_HTTP_POST,
-                service_url_binding=None):
-        """
-        Construct a Authentication Request
-
-        :param location: The URL of the destination
-        :param session_id: The ID of the session
-        :param vorg: The virtual organization if any that is involved
-        :param scoping: How the request should be scoped, default == Not
-        :param log: A log function to use for logging
-        :param sign: If the request should be signed
-        :param binding: The binding to use, default = HTTP POST
-        :return: An AuthnRequest instance
-        """
-        spentityid = self.config.entityid
-        if service_url_binding is None:
-            service_url = self.service_url(binding)
-        else:
-            service_url = self.service_url(service_url_binding)
-
-        if binding == BINDING_PAOS:
-            my_name = None
-            location = None
-        else:
-            my_name = self._my_name()
-
-
-        if log is None:
-            log = self.logger
-
-        if log:
-            log.info("spentityid: %s" % spentityid)
-            log.info("service_url: %s" % service_url)
-            log.info("my_name: %s" % my_name)
-
-        return self.authn_request(session_id, location, service_url,
-                                  spentityid, my_name, vorg, scoping, log,
-                                  sign, binding=binding)
 
     def authenticate(self, entityid=None, relay_state="",
                      binding=saml2.BINDING_HTTP_REDIRECT,
@@ -388,8 +366,9 @@ class Saml2Client(object):
         location = self._sso_location(entityid)
         session_id = sid()
 
-        _req_str = "%s" % self.authn(location, session_id, vorg, scoping, log,
-                                       sign)
+        _req_str = "%s" % self._authn_request(session_id, location, vorg=vorg,
+                                              scoping=scoping,
+                                              log=log, sign=sign)
 
         if log:
             log.info("AuthNReq: %s" % _req_str)
@@ -411,7 +390,6 @@ class Saml2Client(object):
             raise Exception("Unkown binding type: %s" % binding)
         return session_id, response
 
-    
     def create_attribute_query(self, session_id, subject_id, destination,
             issuer_id=None, attribute=None, sp_name_qualifier=None,
             name_qualifier=None, nameid_format=None, sign=False):
@@ -1010,7 +988,7 @@ class Saml2Client(object):
             log.info("my_name: %s" % my_name)
 
 
-#        authen_req = self.authn_request(session_id, location,
+#        authen_req = self._authn_request(session_id, location,
 #                                service_url, spentityid, my_name, vorg,
 #                                scoping, log, sign)
         
