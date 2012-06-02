@@ -344,9 +344,9 @@ class SAML2Plugin(FormPluginBase):
         try:
             # Evaluate the response, returns a AuthnResponse instance
             try:
-                authresp = self.saml_client.response(post, 
-                                                    self.outstanding_queries,
-                                                    self.log)
+                authresp = self.saml_client.authn_response(post, 
+                                                           self.outstanding_queries,
+                                                           self.log)
             except Exception, excp:
                 if self.log:
                     self.log.error("Exception: %s" % (excp,))

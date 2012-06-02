@@ -358,62 +358,6 @@ class Saml2Client(object):
         else:
             return None
 
-    def response(self, post, outstanding, log=None, decode=True,
-                 asynchop=True):
-        """ Deal with an AuthnResponse or LogoutResponse
-        
-        :param post: The reply as a dictionary
-        :param outstanding: A dictionary with session IDs as keys and
-            the original web request from the user before redirection
-            as values.
-        :param log: where loggin should go.
-        :param decode: Whether the response is Base64 encoded or not
-        :param asynchop: Whether the response was return over a asynchronous
-            connection. SOAP for instance is synchronous
-        :return: An response.AuthnResponse or response.LogoutResponse instance
-        """
-        # If the request contains a samlResponse, try to validate it
-        try:
-            saml_response = post['SAMLResponse']
-        except KeyError:
-            return None
-
-        try:
-            _ = self.config.entityid
-        except KeyError:
-            raise Exception("Missing entity_id specification")
-
-        if log is None:
-            log = self.logger
-            
-        reply_addr = self.service_url()
-        
-        resp = None
-        if saml_response:
-            try:
-                resp = response_factory(saml_response, self.config,
-                                        reply_addr, outstanding, log, 
-                                        debug=self.debug, decode=decode,
-                                        asynchop=asynchop, 
-                                        allow_unsolicited=self.allow_unsolicited)
-            except Exception, exc:
-                if log:
-                    log.error("%s" % exc)
-                return None
-            if log:
-                log.debug(">> %s", resp)
-
-            resp = resp.verify()
-            if isinstance(resp, AuthnResponse):
-                self.users.add_information_about_person(resp.session_info())
-                if log:
-                    log.info("--- ADDED person info ----")
-            elif isinstance(resp, LogoutResponse):
-                self.handle_logout_response(resp, log)
-            elif log:
-                log.error("Response type not supported: %s" % saml2.class_name(resp))
-        return resp
-
     def authenticate(self, entityid=None, relay_state="",
                      binding=saml2.BINDING_HTTP_REDIRECT,
                      log=None, vorg="", scoping=None, sign=None):
@@ -456,6 +400,323 @@ class Saml2Client(object):
         else:
             raise Exception("Unkown binding type: %s" % binding)
         return session_id, response
+
+    def authn_response(self, post, outstanding, log=None, decode=True,
+                       asynchop=True):
+        """ Deal with an AuthnResponse
+
+        :param post: The reply as a dictionary
+        :param outstanding: A dictionary with session IDs as keys and
+            the original web request from the user before redirection
+            as values.
+        :param log: where loggin should go.
+        :param decode: Whether the response is Base64 encoded or not
+        :param asynchop: Whether the response was return over a asynchronous
+            connection. SOAP for instance is synchronous
+        :return: An response.AuthnResponse instance
+        """
+        # If the request contains a samlResponse, try to validate it
+        try:
+            saml_response = post['SAMLResponse']
+        except KeyError:
+            return None
+
+        try:
+            _ = self.config.entityid
+        except KeyError:
+            raise Exception("Missing entity_id specification")
+
+        if log is None:
+            log = self.logger
+
+        reply_addr = self.service_url()
+
+        resp = None
+        if saml_response:
+            try:
+                resp = response_factory(saml_response, self.config,
+                                        reply_addr, outstanding, log,
+                                        debug=self.debug, decode=decode,
+                                        asynchop=asynchop,
+                                        allow_unsolicited=self.allow_unsolicited)
+            except Exception, exc:
+                if log:
+                    log.error("%s" % exc)
+                return None
+
+            if log:
+                log.debug(">> %s", resp)
+
+            resp = resp.verify()
+
+            self.users.add_information_about_person(resp.session_info())
+            if log:
+                log.info("--- ADDED person info ----")
+
+        return resp
+
+    def logout(self, subject_id, reason="", expire=None,
+               sign=None, log=None, return_to="/"):
+        """Creates a Logout Request.
+
+        :param subject_id: The identifier of the subject that wants to be
+            logged out.
+        :param reason: Why the subject wants to log out
+        :param expire: The latest the log out should happen.
+        :param sign: Whether the request should be signed or not.
+            This also depends on what binding is used.
+        :param log: A logging function
+        :param return_to: Where to send the user after she has been
+            logged out.
+        :return: Depends on which binding is used:
+            If the HTTP redirect binding then a HTTP redirect,
+            if SOAP binding has been used the just the result of that
+            conversation.
+        """
+        if log is None:
+            log = self.logger
+
+        if log:
+            log.info("logout request for: %s" % subject_id)
+
+        # find out which IdPs/AAs I should notify
+        entity_ids = self.users.issuers_of_info(subject_id)
+
+        # check time
+        if not not_on_or_after(expire): # I've run out of time
+            # Do the local logout anyway
+            self.users.remove_person(subject_id)
+            return 0, "504 Gateway Timeout", [], []
+
+        # for all where I can use the SOAP binding, do those first
+        not_done = entity_ids[:]
+        response = False
+        if log is None:
+            log = self.logger
+
+        for entity_id in entity_ids:
+            response = False
+
+            for binding in [BINDING_SOAP, BINDING_HTTP_POST,
+                            BINDING_HTTP_REDIRECT]:
+                destinations = self.config.single_logout_services(entity_id,
+                                                                binding)
+                if not destinations:
+                    continue
+
+                destination = destinations[0]
+
+                if log:
+                    log.info("destination to provider: %s" % destination)
+                request = self._logout_request(subject_id, destination,
+                                               entity_id, reason, expire)
+
+                to_sign = []
+                #if sign and binding != BINDING_HTTP_REDIRECT:
+
+                if sign is None:
+                    sign = self.logout_requests_signed_default
+
+                if sign:
+                    request.signature = pre_signature_part(request.id,
+                                                    self.sec.my_cert, 1)
+                    to_sign = [(class_name(request), request.id)]
+
+                if log:
+                    log.info("REQUEST: %s" % request)
+
+                request = signed_instance_factory(request, self.sec, to_sign)
+
+                if binding == BINDING_SOAP:
+                    response = send_using_soap(request, destination,
+                                                self.config.key_file,
+                                                self.config.cert_file,
+                                                log=log,
+                                                ca_certs=self.config.ca_certs)
+                    if response:
+                        if log:
+                            log.info("Verifying response")
+                        response = self.logout_response(response, log)
+
+                    if response:
+                        not_done.remove(entity_id)
+                        if log:
+                            log.info("OK response from %s" % destination)
+                    else:
+                        if log:
+                            log.info(
+                                    "NOT OK response from %s" % destination)
+
+                else:
+                    session_id = request.id
+                    rstate = self._relay_state(session_id)
+
+                    self.state[session_id] = {"entity_id": entity_id,
+                                                "operation": "SLO",
+                                                "entity_ids": entity_ids,
+                                                "subject_id": subject_id,
+                                                "reason": reason,
+                                                "not_on_of_after": expire,
+                                                "sign": sign,
+                                                "return_to": return_to}
+
+
+                    if binding == BINDING_HTTP_POST:
+                        (head, body) = http_post_message(request,
+                                                         destination,
+                                                         rstate)
+                        code = "200 OK"
+                    else:
+                        (head, body) = http_redirect_message(request,
+                                                             destination,
+                                                             rstate)
+                        code = "302 Found"
+
+                    return session_id, code, head, body
+
+        if not_done:
+            # upstream should try later
+            raise LogoutError("%s" % (entity_ids,))
+
+        return 0, "", [], response
+
+    def logout_response(self, xmlstr, log=None, binding=BINDING_SOAP):
+        """ Deal with a LogoutResponse
+
+        :param xmlstr: The response as a xml string
+        :param log: logging function
+        :param binding: What type of binding this message came through.
+        :return: None if the reply doesn't contain a valid SAML LogoutResponse,
+            otherwise the reponse if the logout was successful and None if it
+            was not.
+        """
+
+        response = None
+        if log is None:
+            log = self.logger
+
+        if xmlstr:
+            try:
+                # expected return address
+                return_addr = self.config.endpoint("single_logout_service",
+                                                   binding=binding)[0]
+            except Exception:
+                if log:
+                    log.info("Not supposed to handle this!")
+                return None
+
+            try:
+                response = LogoutResponse(self.sec, return_addr,
+                                          debug=self.debug, log=log)
+            except Exception, exc:
+                if log:
+                    log.info("%s" % exc)
+                return None
+
+            if binding == BINDING_HTTP_REDIRECT:
+                xmlstr = decode_base64_and_inflate(xmlstr)
+            elif binding == BINDING_HTTP_POST:
+                xmlstr = base64.b64decode(xmlstr)
+
+            if log:
+                log.debug("XMLSTR: %s" % xmlstr)
+
+            response = response.loads(xmlstr, False)
+
+            if response:
+                response = response.verify()
+
+            if not response:
+                return None
+
+            if log:
+                log.debug(response)
+
+            status = self.state[response.in_response_to]
+            issuer = response.issuer()
+
+            if log:
+                log.info("state: %s" % (self.state,))
+                log.info("status: %s" % (status,))
+                log.info("issuer: %s" % issuer)
+
+            del self.state[response.in_response_to]
+
+            if status["entity_ids"] == [issuer]: # done
+                self.users.remove_person(status["subject_id"])
+                return 0, "200 Ok", [("Content-type","text/html")], []
+            else:
+                status["entity_ids"].remove(issuer)
+                return self.logout(status["subject_id"],
+                                   status["reason"],
+                                   status["not_on_or_after"],
+                                   status["sign"],
+                                   log,
+                                   status['return_to'])
+
+        return response
+
+    def logout_request(self, request, subject_id, log=None,
+                            binding=BINDING_HTTP_REDIRECT):
+        """ Deal with a LogoutRequest
+
+        :param request: The request. The format depends on which binding is
+            used.
+        :param subject_id: the id of the current logged user
+        :return: What is returned also depends on which binding is used.
+        """
+        if log is None:
+            log = self.logger
+
+        if binding != BINDING_HTTP_REDIRECT:
+            if log:
+                log.error("Sorry, only HTTP_REDIRECT is supported for logout")
+
+            return
+
+        headers = []
+        success = False
+        if log is None:
+            log = self.logger
+
+        try:
+            saml_request = request['SAMLRequest']
+        except KeyError:
+            return None
+
+        if saml_request:
+            xml = decode_base64_and_inflate(saml_request)
+
+            logout_request = samlp.logout_request_from_string(xml)
+            if log:
+                log.debug(logout_request)
+
+            if logout_request.name_id.text == subject_id:
+                status = samlp.STATUS_SUCCESS
+                self.users.remove_person(subject_id)
+                success = True
+            else:
+                status = samlp.STATUS_REQUEST_DENIED
+
+            response, destination = self._logout_response(
+                logout_request.issuer.text,
+                logout_request.id,
+                status
+                )
+
+            if log:
+                log.info("RESPONSE: {0:>s}".format(response))
+
+            if 'RelayState' in request:
+                rstate = request['RelayState']
+            else:
+                rstate = ""
+
+            (headers, _body) = http_redirect_message(str(response),
+                                                     destination,
+                                                     rstate, 'SAMLResponse')
+
+        return headers, success
 
     def create_attribute_query(self, session_id, subject_id, destination,
             issuer_id=None, attribute=None, sp_name_qualifier=None,
@@ -546,10 +807,10 @@ class Saml2Client(object):
         request = self.create_attribute_query(session_id, subject_id,
                     destination, issuer, attribute, sp_name_qualifier,
                     name_qualifier, nameid_format=nameid_format)
-        
+
         if log:
             log.info("Request, created: %s" % request)
-        
+
         soapclient = SOAPClient(destination, self.config.key_file,
                                 self.config.cert_file,
                                 ca_certs=self.config.ca_certs)
@@ -562,17 +823,17 @@ class Saml2Client(object):
             if log:
                 log.info("SoapClient exception: %s" % (exc,))
             return None
-        
+
         if log:
             log.info("SOAP request sent and got response: %s" % response)
 #            fil = open("response.xml", "w")
 #            fil.write(response)
 #            fil.close()
-            
+
         if response:
             if log:
                 log.info("Verifying response")
-            
+
             try:
                 # synchronous operation
                 aresp = attribute_response(self.config, issuer, log=log)
@@ -580,20 +841,20 @@ class Saml2Client(object):
                 if log:
                     log.error("%s", (exc,))
                 return None
-                
+
             _resp = aresp.loads(response, False, soapclient.response).verify()
             if _resp is None:
                 if log:
                     log.error("Didn't like the response")
                 return None
-            
+
             session_info = _resp.session_info()
 
             if session_info:
                 if real_id is not None:
                     session_info["name_id"] = real_id
                 self.users.add_information_about_person(session_info)
-            
+
             if log:
                 log.info("session: %s" % session_info)
             return session_info
@@ -601,293 +862,12 @@ class Saml2Client(object):
             if log:
                 log.info("No response")
             return None
-    
-    def global_logout(self, subject_id, reason="", expire=None,  # ***
-                          sign=None, log=None, return_to="/"):
-        """Creates a Logout Request.
-        
-        :param subject_id: The identifier of the subject that wants to be
-            logged out.
-        :param reason: Why the subject wants to log out
-        :param expire: The latest the log out should happen.
-        :param sign: Whether the request should be signed or not.
-            This also depends on what binding is used.
-        :param log: A logging function
-        :param return_to: Where to send the user after she has been
-            logged out.
-        :return: Depends on which binding is used:
-            If the HTTP redirect binding then a HTTP redirect,
-            if SOAP binding has been used the just the result of that
-            conversation. 
-        """
-        if log is None:
-            log = self.logger
-
-        if log:
-            log.info("logout request for: %s" % subject_id)
-
-        # find out which IdPs/AAs I should notify
-        entity_ids = self.users.issuers_of_info(subject_id)
-
-        # check time
-        if not not_on_or_after(expire): # I've run out of time
-            # Do the local logout anyway
-            self.users.remove_person(subject_id)
-            return 0, "504 Gateway Timeout", [], []
-            
-        # for all where I can use the SOAP binding, do those first
-        not_done = entity_ids[:]
-        response = False
-        if log is None:
-            log = self.logger
-
-        for entity_id in entity_ids:
-            response = False
-
-            for binding in [BINDING_SOAP, BINDING_HTTP_POST,
-                            BINDING_HTTP_REDIRECT]:
-                destinations = self.config.single_logout_services(entity_id,
-                                                                binding)
-                if not destinations:
-                    continue
-
-                destination = destinations[0]
-                
-                if log:
-                    log.info("destination to provider: %s" % destination)
-                request = self._logout_request(subject_id, destination,
-                                               entity_id, reason, expire)
-                
-                to_sign = []
-                #if sign and binding != BINDING_HTTP_REDIRECT:
-
-                if sign is None:
-                    sign = self.logout_requests_signed_default
-
-                if sign:
-                    request.signature = pre_signature_part(request.id,
-                                                    self.sec.my_cert, 1)
-                    to_sign = [(class_name(request), request.id)]
-        
-                if log:
-                    log.info("REQUEST: %s" % request)
-
-                request = signed_instance_factory(request, self.sec, to_sign)
-        
-                if binding == BINDING_SOAP:
-                    response = send_using_soap(request, destination, 
-                                                self.config.key_file,
-                                                self.config.cert_file,
-                                                log=log,
-                                                ca_certs=self.config.ca_certs)
-                    if response:
-                        if log:
-                            log.info("Verifying response")
-                        response = self.logout_response(response, log)
-
-                    if response:
-                        not_done.remove(entity_id)
-                        if log:
-                            log.info("OK response from %s" % destination)
-                    else:
-                        if log:
-                            log.info(
-                                    "NOT OK response from %s" % destination)
-
-                else:
-                    session_id = request.id
-                    rstate = self._relay_state(session_id)
-
-                    self.state[session_id] = {"entity_id": entity_id,
-                                                "operation": "SLO",
-                                                "entity_ids": entity_ids,
-                                                "subject_id": subject_id,
-                                                "reason": reason,
-                                                "not_on_of_after": expire,
-                                                "sign": sign,
-                                                "return_to": return_to}
-                    
-
-                    if binding == BINDING_HTTP_POST:
-                        (head, body) = http_post_message(request, 
-                                                            destination, 
-                                                            rstate)
-                        code = "200 OK"
-                    else:
-                        (head, body) = http_redirect_message(request, 
-                                                            destination, 
-                                                            rstate)
-                        code = "302 Found"
-            
-                    return session_id, code, head, body
-        
-        if not_done:
-            # upstream should try later
-            raise LogoutError("%s" % (entity_ids,))
-        
-        return 0, "", [], response
-
-    def handle_logout_response(self, response, log):
-        """ handles a Logout response 
-        
-        :param response: A response.Response instance
-        :param log: A logging function
-        :return: 4-tuple of (session_id of the last sent logout request,
-            response message, response headers and message)
-        """
-        if log is None:
-            log = self.logger
-
-        if log:
-            log.info("state: %s" % (self.state,))
-        status = self.state[response.in_response_to]
-        if log:
-            log.info("status: %s" % (status,))
-        issuer = response.issuer()
-        if log:
-            log.info("issuer: %s" % issuer)
-        del self.state[response.in_response_to]
-        if status["entity_ids"] == [issuer]: # done
-            self.users.remove_person(status["subject_id"])
-            return 0, "200 Ok", [("Content-type","text/html")], []
-        else:
-            status["entity_ids"].remove(issuer)
-            return self.global_logout(status["subject_id"], 
-                                      status["entity_ids"], 
-                                      status["reason"], 
-                                      status["not_on_or_after"], 
-                                      status["sign"], 
-                                      log, )
-        
-    def logout_response(self, xmlstr, log=None, binding=BINDING_SOAP):  # ***
-        """ Deal with a LogoutResponse
-
-        :param xmlstr: The response as a xml string
-        :param log: logging function
-        :param binding: What type of binding this message came through.
-        :return: None if the reply doesn't contain a valid SAML LogoutResponse,
-            otherwise the reponse if the logout was successful and None if it 
-            was not.
-        """
-        
-        response = None
-        if log is None:
-            log = self.logger
-
-        if xmlstr:
-            try:
-                # expected return address
-                return_addr = self.config.endpoint("single_logout_service",
-                                                   binding=binding)[0]
-            except Exception:
-                if log:
-                    log.info("Not supposed to handle this!")
-                return None
-            
-            try:
-                response = LogoutResponse(self.sec, return_addr,
-                                          debug=self.debug, log=log)
-            except Exception, exc:
-                if log:
-                    log.info("%s" % exc)
-                return None
-                
-            if binding == BINDING_HTTP_REDIRECT:
-                xmlstr = decode_base64_and_inflate(xmlstr)
-            elif binding == BINDING_HTTP_POST:
-                xmlstr = base64.b64decode(xmlstr)
-
-            if log:
-                log.debug("XMLSTR: %s" % xmlstr)
-
-            response = response.loads(xmlstr, False)
-
-            if response:
-                response = response.verify()
-                
-            if not response:
-                return None
-            
-            if log:
-                log.debug(response)
-
-            return self.handle_logout_response(response, log)
-
-        return response
-
-    def http_redirect_logout_request(self, get, subject_id, log=None):
-        """ Deal with a LogoutRequest received through HTTP redirect
-
-        :param get: The request as a dictionary 
-        :param subject_id: the id of the current logged user
-        :return: a tuple with a list of header tuples (presently only location)
-            and a status which will be True in case of success or False 
-            otherwise.
-        """
-        headers = []
-        success = False
-        if log is None:
-            log = self.logger
-
-        try:
-            saml_request = get['SAMLRequest']
-        except KeyError:
-            return None
-
-        if saml_request:
-            xml = decode_base64_and_inflate(saml_request)
-
-            request = samlp.logout_request_from_string(xml)
-            if log:
-                log.debug(request)
-
-            if request.name_id.text == subject_id:
-                status = samlp.STATUS_SUCCESS
-                self.users.remove_person(subject_id)
-                success = True
-            else:
-                status = samlp.STATUS_REQUEST_DENIED
-
-            response, destination = self._logout_response(
-                request.issuer.text,
-                request.id,
-                status
-                )
-
-            if log:
-                log.info("RESPONSE: {0:>s}".format(response))
-
-            if 'RelayState' in get:
-                rstate = get['RelayState']
-            else:
-                rstate = ""
-                
-            (headers, _body) = http_redirect_message(str(response), 
-                                                    destination, 
-                                                    rstate, 'SAMLResponse')
-
-        return headers, success
-
-    def logout_request(self, request, subject_id, log=None,   # ***
-                            binding=BINDING_HTTP_REDIRECT):
-        """ Deal with a LogoutRequest 
-
-        :param request: The request. The format depends on which binding is
-            used.
-        :param subject_id: the id of the current logged user
-        :return: What is returned also depends on which binding is used.
-        """
-        if log is None:
-            log = self.logger
-
-        if binding == BINDING_HTTP_REDIRECT:
-            return self.http_redirect_logout_request(request, subject_id, log)        
 
     def add_vo_information_about_user(self, subject_id):
         """ Add information to the knowledge I have about the user. This is
         for Virtual organizations.
-        
-        :param subject_id: The subject identifier 
+
+        :param subject_id: The subject identifier
         :return: A possibly extended knowledge.
         """
 

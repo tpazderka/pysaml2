@@ -262,8 +262,10 @@ class TestClient:
 
         resp_str = base64.encodestring(resp_str)
         
-        authn_response = self.client.response({"SAMLResponse":resp_str},
-                            {"id1":"http://foo.example.com/service"})
+        authn_response = self.client.authn_response(
+            {"SAMLResponse":resp_str},
+            {"id1":"http://foo.example.com/service"}
+            )
                             
         assert authn_response is not None
         assert authn_response.issuer() == IDP
@@ -300,8 +302,8 @@ class TestClient:
 
         resp_str = base64.encodestring(resp_str)
         
-        self.client.response({"SAMLResponse":resp_str},
-                            {"id2":"http://foo.example.com/service"})
+        self.client.authn_response({"SAMLResponse":resp_str},
+                                   {"id2":"http://foo.example.com/service"})
         
         # Two persons in the cache
         assert len(self.client.users.subjects()) == 2
@@ -383,7 +385,7 @@ class TestClient:
         self.client.users.add_information_about_person(session_info)
         entity_ids = self.client.users.issuers_of_info("123456")
         assert entity_ids == ["urn:mace:example.com:saml:roland:idp"]
-        resp = self.client.global_logout("123456", "Tired", in_a_while(minutes=5))
+        resp = self.client.logout("123456", "Tired", in_a_while(minutes=5))
         print resp
         assert resp
         assert resp[0] # a session_id
@@ -427,7 +429,7 @@ class TestClient:
         assert destinations == ['http://localhost:8088/slo']
 
         # Will raise an error since there is noone at the other end.
-        raises(LogoutError, 'client.global_logout("123456", "Tired", in_a_while(minutes=5))')
+        raises(LogoutError, 'client.logout("123456", "Tired", in_a_while(minutes=5))')
 
     def test_logout_3(self):
         """ two or more IdP/AA with BINDING_HTTP_REDIRECT"""
@@ -460,7 +462,7 @@ class TestClient:
         entity_ids = client.users.issuers_of_info("123456")
         assert _leq(entity_ids, ["urn:mace:example.com:saml:roland:idp",
                                 "urn:mace:example.com:saml:roland:aa"])
-        resp = client.global_logout("123456", "Tired", in_a_while(minutes=5))
+        resp = client.logout("123456", "Tired", in_a_while(minutes=5))
         print resp
         assert resp
         assert resp[0] # a session_id
@@ -571,7 +573,7 @@ class TestClient:
         resp_str = base64.encodestring(resp_str)
 
         self.client.allow_unsolicited = True
-        authn_response = self.client.response({"SAMLResponse":resp_str}, ())
+        authn_response = self.client.authn_response({"SAMLResponse":resp_str}, ())
                             
         assert authn_response is not None
         assert authn_response.issuer() == IDP
