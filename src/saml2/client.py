@@ -280,6 +280,44 @@ class Saml2Client(object):
 
         return signed_instance_factory(request, self.sec, to_sign)
 
+    def _logout_request(self, subject_id, destination,
+                        issuer_entity_id, reason=None, expire=None):
+        """ Constructs a LogoutRequest
+        
+        :param subject_id: The identifier of the subject
+        :param destination:
+        :param issuer_entity_id: The entity ID of the IdP the request is
+            target at.
+        :param reason: An indication of the reason for the logout, in the
+            form of a URI reference.
+        :param expire: The time at which the request expires,
+            after which the recipient may discard the message.
+        :return: A LogoutRequest instance
+        """
+            
+        session_id = sid()
+        # create NameID from subject_id
+        name_id = saml.NameID(
+            text = self.users.get_entityid(subject_id, issuer_entity_id,
+                                           False))
+
+        request = samlp.LogoutRequest(
+            id=session_id,
+            version=VERSION,
+            issue_instant=instant(),
+            destination=destination,
+            issuer=self._issuer(),
+            name_id = name_id
+        )
+    
+        if reason:
+            request.reason = reason
+    
+        if expire:
+            request.not_on_or_after = expire
+                        
+        return request
+
     #
     # Public API
     #
@@ -535,44 +573,6 @@ class Saml2Client(object):
                 log.info("No response")
             return None
     
-    def construct_logout_request(self, subject_id, destination,
-                                    issuer_entity_id, reason=None, expire=None):
-        """ Constructs a LogoutRequest
-        
-        :param subject_id: The identifier of the subject
-        :param destination:
-        :param issuer_entity_id: The entity ID of the IdP the request is
-            target at.
-        :param reason: An indication of the reason for the logout, in the
-            form of a URI reference.
-        :param expire: The time at which the request expires,
-            after which the recipient may discard the message.
-        :return: A LogoutRequest instance
-        """
-            
-        session_id = sid()
-        # create NameID from subject_id
-        name_id = saml.NameID(
-            text = self.users.get_entityid(subject_id, issuer_entity_id,
-                                           False))
-
-        request = samlp.LogoutRequest(
-            id=session_id,
-            version=VERSION,
-            issue_instant=instant(),
-            destination=destination,
-            issuer=self._issuer(),
-            name_id = name_id
-        )
-    
-        if reason:
-            request.reason = reason
-    
-        if expire:
-            request.not_on_or_after = expire
-                        
-        return request
-    
     def global_logout(self, subject_id, reason="", expire=None,
                           sign=None, log=None, return_to="/"):
         """ More or less a layer of indirection :-/
@@ -635,8 +635,8 @@ class Saml2Client(object):
                 
                 if log:
                     log.info("destination to provider: %s" % destination)
-                request = self.construct_logout_request(subject_id, destination,
-                                                    entity_id, reason, expire)
+                request = self._logout_request(subject_id, destination,
+                                               entity_id, reason, expire)
                 
                 to_sign = []
                 #if sign and binding != BINDING_HTTP_REDIRECT:
