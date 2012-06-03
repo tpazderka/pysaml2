@@ -449,9 +449,14 @@ class Saml2Client(object):
 
             resp = resp.verify()
 
-            self.users.add_information_about_person(resp.session_info())
-            if log:
-                log.info("--- ADDED person info ----")
+            if isinstance(resp, AuthnResponse):
+                self.users.add_information_about_person(resp.session_info())
+                if log:
+                    log.info("--- ADDED person info ----")
+
+            else:
+                if log:
+                    log.error("Response type not supported: %s" % saml2.class_name(resp))
 
         return resp
 
