@@ -374,7 +374,7 @@ class Saml2Client(object):
         :return: AuthnRequest response
         """
 
-        location = self._sso_location(entityid)
+        location = self._sso_location(entityid, binding)
         session_id = sid()
 
         _req_str = "%s" % self._authn_request(session_id, location, vorg=vorg,
@@ -1017,9 +1017,9 @@ class Saml2Client(object):
 
         return None
 
-    def request_to_discovery_service(self, disc_url, return_url="",
-                                     policy="", returnIDParam="",
-                                     is_passive=False ):
+    def discovery_service_request_url(self, disc_url, return_url="",
+                                       policy="", returnIDParam="",
+                                       is_passive=False ):
         """
         Created the HTTP redirect URL needed to send the user to the
         discovery service.
@@ -1050,13 +1050,13 @@ class Saml2Client(object):
         params = urllib.urlencode(pdir)
         return "%s?%s" % (disc_url, params)
 
-    def get_idp_from_discovery_service(self, query="", url="", returnIDParam=""):
+    def discovery_service_response(self, query="", url="", returnIDParam=""):
         """
-        Deal with the reponse url from a Discovery Service
+        Deal with the response url from a Discovery Service
 
         :param url: the url the user was redirected back to
         :param returnIDParam: This is where the identifier of the IdP is
-            place if it was specified in the query otherwise in 'entityID'
+            place if it was specified in the query as not being 'entityID'
         :return: The IdP identifier or "" if none was given
         """
 
