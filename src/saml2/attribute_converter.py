@@ -493,7 +493,6 @@ class AttributeConverter(object):
         """
         attributes = []
         for key, value in attrvals.items():
-            key = key.lower()
             try:
                 attributes.append(factory(saml.Attribute,
                                           name=self._to[key],
