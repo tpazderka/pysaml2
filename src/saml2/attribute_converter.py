@@ -372,15 +372,15 @@ class AttributeConverter(object):
 
     def ava_from(self, attribute, allow_unknown=False):
         try:
-            attr = self._fro[attribute.name.strip().lower()]
+            attr = self._fro[attribute.name.strip()]
         except AttributeError:
-            attr = attribute.friendly_name.strip().lower()
+            attr = attribute.friendly_name.strip()
         except KeyError:
             if allow_unknown:
                 try:
-                    attr = attribute.name.strip().lower()
+                    attr = attribute.name.strip()
                 except AttributeError:
-                    attr = attribute.friendly_name.strip().lower()
+                    attr = attribute.friendly_name.strip()
             else:
                 raise
 
@@ -454,12 +454,12 @@ class AttributeConverter(object):
         if attr.name_format:
             if self.name_format == attr.name_format:
                 try:
-                    return self._fro[attr.name.lower()]
+                    return self._fro[attr.name]
                 except KeyError:
                     pass
         else:  # don't know the name format so try all I have
             try:
-                return self._fro[attr.name.lower()]
+                return self._fro[attr.name]
             except KeyError:
                 pass
 
@@ -474,12 +474,12 @@ class AttributeConverter(object):
         if attr["name_format"]:
             if self.name_format == attr["name_format"]:
                 try:
-                    return self._fro[attr["name"].lower()]
+                    return self._fro[attr["name"]]
                 except KeyError:
                     pass
         else:  # don't know the name format so try all I have
             try:
-                return self._fro[attr["name"].lower()]
+                return self._fro[attr["name"]]
             except KeyError:
                 pass
 
@@ -521,7 +521,7 @@ class AttributeConverterNOOP(AttributeConverter):
         """
         attributes = []
         for key, value in attrvals.items():
-            key = key.lower()
+            key = key
             attributes.append(factory(saml.Attribute,
                                       name=key,
                                       name_format=self.name_format,
