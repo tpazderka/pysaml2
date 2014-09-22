@@ -508,7 +508,6 @@ class AttributeConverterNOOP(AttributeConverter):
         """
         attributes = []
         for key, value in attrvals.items():
-            key = key
             attributes.append(factory(saml.Attribute,
                                       name=key,
                                       name_format=self.name_format,
