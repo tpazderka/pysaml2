@@ -1,8 +1,10 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import datetime
 import re
+from saml2.httpbase import HTTPBase
 
-from saml2.mdstore import MetadataStore
+from saml2.mdstore import MetadataStore, MetaDataMDX
 from saml2.mdstore import destinations
 from saml2.mdstore import name
 
@@ -223,5 +225,29 @@ def test_metadata_file():
     print len(mds.keys())
     assert len(mds.keys()) == 560
 
+
+def test_mdx_service():
+    sec_config.xmlsec_binary = sigver.get_xmlsec_binary(["/opt/local/bin"])
+    http = HTTPBase(verify=False, ca_bundle=None)
+
+    mdx = MetaDataMDX(ONTS.values(), ATTRCONV, "http://pyff-test.nordu.net",
+                      sec_config, None, http)
+    foo = mdx.service("https://idp.umu.se/saml2/idp/metadata.php",
+                      "idpsso_descriptor", "single_sign_on_service")
+
+    assert len(foo) == 1
+    assert foo.keys()[0] == BINDING_HTTP_REDIRECT
+
+
+def test_mdx_certs():
+    sec_config.xmlsec_binary = sigver.get_xmlsec_binary(["/opt/local/bin"])
+    http = HTTPBase(verify=False, ca_bundle=None)
+
+    mdx = MetaDataMDX(ONTS.values(), ATTRCONV, "http://pyff-test.nordu.net",
+                      sec_config, None, http)
+    foo = mdx.certs("https://idp.umu.se/saml2/idp/metadata.php", "idpsso")
+
+    assert len(foo) == 1
+
 if __name__ == "__main__":
-    test_metadata_file()
+    test_mdx_certs()

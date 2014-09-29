@@ -3,6 +3,7 @@ import sys
 import json
 
 from hashlib import sha1
+from urllib import urlencode, quote_plus
 from saml2.httpbase import HTTPBase
 from saml2.extension.idpdisc import BINDING_DISCO
 from saml2.extension.idpdisc import DiscoveryResponse
@@ -390,6 +391,45 @@ class MetaData(object):
 
         return True
 
+    def certs(self, entity_id, descriptor, use="signing"):
+        ent = self.__getitem__(entity_id)
+        if descriptor == "any":
+            res = []
+            for descr in ["spsso", "idpsso", "role", "authn_authority",
+                          "attribute_authority", "pdp"]:
+                try:
+                    srvs = ent["%s_descriptor" % descr]
+                except KeyError:
+                    continue
+
+                for srv in srvs:
+                    for key in srv["key_descriptor"]:
+                        if "use" in key and key["use"] == use:
+                            for dat in key["key_info"]["x509_data"]:
+                                cert = repack_cert(
+                                    dat["x509_certificate"]["text"])
+                                if cert not in res:
+                                    res.append(cert)
+                        elif not "use" in key:
+                            for dat in key["key_info"]["x509_data"]:
+                                cert = repack_cert(
+                                    dat["x509_certificate"]["text"])
+                                if cert not in res:
+                                    res.append(cert)
+        else:
+            srvs = ent["%s_descriptor" % descriptor]
+
+            res = []
+            for srv in srvs:
+                for key in srv["key_descriptor"]:
+                    if "use" in key and key["use"] == use:
+                        for dat in key["key_info"]["x509_data"]:
+                            res.append(dat["x509_certificate"]["text"])
+                    elif not "use" in key:
+                        for dat in key["key_info"]["x509_data"]:
+                            res.append(dat["x509_certificate"]["text"])
+        return res
+
 
 class MetaDataFile(MetaData):
     """
@@ -523,6 +563,53 @@ class MetaDataMD(MetaData):
     def load(self):
         for key, item in json.loads(open(self.filename).read()):
             self.entity[key] = item
+
+
+class MetaDataMDX(MetaData):
+    def __init__(self, onts, attrc, url, security, cert, http, **kwargs):
+        """
+        :params onts:
+        :params attrc:
+        :params url:
+        :params security: SecurityContext()
+        :params cert:
+        :params http:
+        """
+        MetaData.__init__(self, onts, attrc, **kwargs)
+        self.url = url
+        self.security = security
+        self.cert = cert
+        self.http = http
+
+    def load(self):
+        pass
+
+    def __getitem__(self, item):
+        try:
+            return self.entity[item]
+        except KeyError:
+            mdx_url = "%s/entities/%s" % (self.url, quote_plus(item))
+            response = self.http.send(mdx_url)
+            if response.status_code == 200:
+                node_name = self.node_name \
+                    or "%s:%s" % (md.EntitiesDescriptor.c_namespace,
+                                  md.EntitiesDescriptor.c_tag)
+
+                _txt = response.text.encode("utf-8")
+
+                if self.cert:
+                    if self.security.verify_signature(_txt,
+                                                      node_name=node_name,
+                                                      cert_file=self.cert):
+                        self.parse(_txt)
+                        return self.entity[item]
+                else:
+                    self.parse(_txt)
+                    return self.entity[item]
+            else:
+                logger.info("Response status: %s" % response.status_code)
+            raise KeyError
+
 
 
 class MetadataStore(object):
@@ -717,7 +804,7 @@ class MetadataStore(object):
                                            DiscoveryResponse.c_tag),
                                 binding)
 
-    def attribute_requirement(self, entity_id, index=0):
+    def attribute_requirement(self, entity_id, index=None):
         for _md in self.metadata.values():
             if entity_id in _md:
                 return _md.attribute_requirement(entity_id, index)
