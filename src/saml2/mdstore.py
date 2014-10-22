@@ -121,7 +121,7 @@ class MetaData(object):
         self.entities_descr = None
         self.entity_descr = None
         self.check_validity = check_validity
-        
+
     def items(self):
         return self.entity.items()
 
@@ -565,7 +565,11 @@ class MetaDataMD(MetaData):
             self.entity[key] = item
 
 
+SAML_METADATA_CONTENT_TYPE = 'application/samlmetadata+xml'
+
+
 class MetaDataMDX(MetaData):
+
     def __init__(self, onts, attrc, url, security, cert, http, **kwargs):
         """
         :params onts:
@@ -589,7 +593,8 @@ class MetaDataMDX(MetaData):
             return self.entity[item]
         except KeyError:
             mdx_url = "%s/entities/%s" % (self.url, quote_plus(item))
-            response = self.http.send(mdx_url)
+            response = self.http.send(
+                mdx_url, headers={'Accept': SAML_METADATA_CONTENT_TYPE})
             if response.status_code == 200:
                 node_name = self.node_name \
                     or "%s:%s" % (md.EntitiesDescriptor.c_namespace,
